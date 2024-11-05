@@ -1,7 +1,6 @@
-use crate::state::{State, TimedState};
+use crate::state::{State, TickResult, TimedState};
 use color_eyre::eyre;
 use console::{Key, Term};
-use either::Either;
 use std::fmt::Debug;
 use std::io::Write;
 use std::process;
@@ -78,7 +77,7 @@ fn format_duration(duration: &Duration) -> String {
 async fn run_timer<I, T, S, F>(
     initial_state: S,
     interval: &mut Interval,
-    f: F,
+    action: F,
 ) -> eyre::Result<State<T>>
 where
     S: TimedState<I, T>,
@@ -88,15 +87,15 @@ where
     F: Fn(&State<I>, &Duration) -> eyre::Result<()>,
 {
     let start_time = initial_state.start_time();
-    let mut new_state_either = initial_state.tick(&start_time.elapsed());
+    let mut tick_result = initial_state.tick(&start_time.elapsed());
     interval.tick().await;
-    while let Either::Left(new_state) = new_state_either {
+    while let TickResult::Continue(new_state) = tick_result {
         let remaining_time = new_state.period_length() - start_time.elapsed();
-        f(&new_state, &remaining_time)?;
+        action(&new_state, &remaining_time)?;
         interval.tick().await;
-        new_state_either = new_state.tick(&start_time.elapsed())
+        tick_result = new_state.tick(&start_time.elapsed())
     }
-    // Unwrap is safe here because this line can only be reached if the if let above failed
-    // i.e. the either is Either::Right
-    Ok(new_state_either.right().unwrap())
+
+    // Unwrap is fine here because the only way out of the loop is if the Continue match failed
+    Ok(tick_result.complete_value().unwrap())
 }

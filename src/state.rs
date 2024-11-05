@@ -1,4 +1,3 @@
-use either::Either;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
@@ -23,29 +22,36 @@ pub struct Break {
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub struct Complete;
 
+#[derive(Debug)]
+pub enum TickResult<C, T> {
+    Continue(State<C>),
+    Complete(State<T>),
+}
+
+impl<C, T> TickResult<C, T> {
+    pub(crate) fn complete_value(self) -> Option<State<T>> {
+        match self {
+            TickResult::Continue(_) => None,
+            TickResult::Complete(value) => Some(value),
+        }
+    }
+}
+
 pub trait TimedState<SelfState, NextState>
 where
-    SelfState: Debug + Eq + PartialEq + Clone,
-    NextState: Debug + Eq + PartialEq + Clone,
     State<SelfState>: TimedState<SelfState, NextState>,
 {
     fn period_length(&self) -> Duration;
     fn start_time(&self) -> Instant;
-    fn tick(self, elapsed_time: &Duration) -> Either<State<SelfState>, State<NextState>>;
+    fn tick(self, elapsed_time: &Duration) -> TickResult<SelfState, NextState>;
 }
 
-pub trait StoppableState<StopState>
-where
-    StopState: Debug + Eq + PartialEq + Clone,
-{
+pub trait StoppableState<StopState> {
     fn stop(self) -> State<StopState>;
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
-pub struct State<T>
-where
-    T: Debug + Eq + PartialEq + Clone,
-{
+pub struct State<T> {
     state: T,
 }
 
@@ -79,11 +85,11 @@ impl TimedState<Working, PostWork> for State<Working> {
         self.state.start_time
     }
 
-    fn tick(self, elapsed_time: &Duration) -> Either<State<Working>, State<PostWork>> {
+    fn tick(self, elapsed_time: &Duration) -> TickResult<Working, PostWork> {
         if elapsed_time < &self.period_length() {
-            Either::Left(self)
+            TickResult::Continue(self)
         } else {
-            Either::Right(State { state: PostWork })
+            TickResult::Complete(State { state: PostWork })
         }
     }
 }
@@ -113,11 +119,11 @@ impl TimedState<Break, Complete> for State<Break> {
         self.state.start_time
     }
 
-    fn tick(self, elapsed_time: &Duration) -> Either<State<Break>, State<Complete>> {
+    fn tick(self, elapsed_time: &Duration) -> TickResult<Break, Complete> {
         if elapsed_time < &self.period_length() {
-            Either::Left(self)
+            TickResult::Continue(self)
         } else {
-            Either::Right(State { state: Complete })
+            TickResult::Complete(State { state: Complete })
         }
     }
 }
@@ -136,7 +142,7 @@ mod tests {
             },
         };
         let new_state = working_state.tick(&Duration::from_secs(5));
-        assert!(new_state.is_left())
+        assert!(matches!(new_state, TickResult::Continue(_)))
     }
 
     #[test]
@@ -149,7 +155,10 @@ mod tests {
             },
         };
         let new_state = working_state.tick(&Duration::from_millis(30_005));
-        assert!(new_state.is_right())
+        assert!(matches!(
+            new_state,
+            TickResult::Complete(State { state: PostWork })
+        ))
     }
 
     #[test]
@@ -162,7 +171,7 @@ mod tests {
             },
         };
         let new_state = break_state.tick(&Duration::from_secs(5));
-        assert!(new_state.is_left())
+        assert!(matches!(new_state, TickResult::Continue(_)))
     }
 
     #[test]
@@ -175,6 +184,9 @@ mod tests {
             },
         };
         let new_state = break_state.tick(&Duration::from_millis(30_005));
-        assert!(new_state.is_right())
+        assert!(matches!(
+            new_state,
+            TickResult::Complete(State { state: Complete })
+        ))
     }
 }
